@@ -1,7 +1,7 @@
 Summary
 -------
 
-Support object pinning in G1, i.e avoid disabling GC between the pair of JNI critical functions.
+Support region pinning in G1, i.e avoid disabling GC between the pair of JNI critical functions.
 
 
 Goals
@@ -15,13 +15,16 @@ Goals
 Motivation
 ----------
 
-JNI critical functions (e.g `GetPrimitiveArrayCritical`/`ReleasePrimitiveArrayCritical` and `GetStringCritical`/`ReleaseStringCritical`) could provide better performance than corresponding non-critical function, because `If possible, the VM returns a pointer to the primitive array or string elements; otherwise, a copy is made.`. However the benefit comes with a possible cost:
-   - `There are significant restrictions on how these functions can be used.` `After calling GetPrimitiveArrayCritical, the native code should not run for an extended period of time before it calls ReleasePrimitiveArrayCritical. We must treat the code inside this pair of functions as running in a "critical region." Inside a critical region, native code must not call other JNI functions, or any system call that may cause the current thread to block and wait for another Java thread. (For example, the current thread must not call read on a stream being written by another Java thread.)`    — JNI Guide Chapter 4: JNI Functions
-   - `These restrictions make it more likely that the native code will obtain an *uncopied* version of the array, even if the VM does not support pinning. For example, a VM may temporarily disable garbage collection when the native code is holding a pointer to an array obtained via GetPrimitiveArrayCritical.`    — JNI Guide Chapter 4: JNI Functions
+JNI critical functions (e.g `GetPrimitiveArrayCritical`/`ReleasePrimitiveArrayCritical` and `GetStringCritical`/`ReleaseStringCritical`) could provide better performance than corresponding non-critical function, because
+> If possible, the VM returns a pointer to the primitive array or string elements; otherwise, a copy is made.
+However the benefit comes with a possible cost:
+> There are significant restrictions on how these functions can be used. After calling GetPrimitiveArrayCritical, the native code should not run for an extended period of time before it calls ReleasePrimitiveArrayCritical. We must treat the code inside this pair of functions as running in a "critical region." Inside a critical region, native code must not call other JNI functions, or any system call that may cause the current thread to block and wait for another Java thread. (For example, the current thread must not call read on a stream being written by another Java thread.)    — JNI Guide Chapter 4: JNI Functions
+> These restrictions make it more likely that the native code will obtain an *uncopied* version of the array, even if the VM does not support pinning. For example, a VM may temporarily disable garbage collection when the native code is holding a pointer to an array obtained via GetPrimitiveArrayCritical.    — JNI Guide Chapter 4: JNI Functions
 
-There are 2 ways for critical functions to cooperate with GCs:
+There are 3 ways for critical functions to cooperate with GCs:
+   - GCLocker. GCLocker disables GC between `GetXxxCritical` and `ReleaseXxxCritical`. In this way, the client needs to balance whether or not to use the beneficial critical functions.
+   - Copying the object back and forth to some area that is not copied (i.e. C heap)
    - Pinning. Pinning means just pin part of the heap, i.e when GC runs, it will skip this pinned part and only work on the rest of the heap. In this way, between the pair of critical functions, GC could still run rather than disabled by GCLocker, and you get the benefit of *uncopied* version of data.
-   - GCLocker. In the other hand, GCLocker will disable GC between `GetXxxCritical` and `ReleaseXxxCritical`. In this way, the client needs to balance whether or not to use the beneficial critical functions.
 
 Currently, critical functions cooperate with G1 GC through GCLocker, we expect to support pinning in G1 to replace GCLocker. There are following benefits:
    - Avoid disabling G1 full cycle between the pair of JNI critical functions
